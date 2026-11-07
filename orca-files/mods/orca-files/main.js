@@ -144,10 +144,16 @@ export default class Files extends View {
     this.hits = null; this.searching = false; this.qFocused = false; this.view = "files";
     // FileExplorerViewSwitch.tsx:21-41 — Names filters the tree by name, Contents searches
     // file text; both inputs stay mounted, as FileExplorer.tsx:294-309 keeps them.
+    // Names matches a flat worktree listing (use-file-explorer-name-filter.ts:45-50), cached
+    // in `names` and projected into `nfMap`; `nfCollapsed` is nameFilterCollapsedPaths.
+    this.names = null; this.nfMap = null; this.nfCollapsed = new Set(); this.nfLoading = false;
     this.name = InputState.new({ placeholder: "Find files" }); // FileExplorerNameFilter.tsx:39
-    this.name.on("change", (_e, cx) => cx.notify());
-    this.name.on("focus", (_e, cx) => { this.qFocused = true; cx.notify(); });
-    this.name.on("blur", (_e, cx) => { this.qFocused = false; cx.notify(); });
+    // A new query blanks the projection and shows the listing spinner, as Orca's
+    // `relativePaths: null` does while `nameFilterFiles.loading` (use-file-explorer-name-filter.ts:57-61).
+    this.name.on("change", (_e, cx) => {
+      if (this.name.value().trim()) { this.nfMap = null; this.nfLoading = true; }
+      cx.notify(); this.scheduleName(cx);
+    });
     // SearchQueryRow.tsx:53 — the Contents input's placeholder is `Search`.
     this.q = InputState.new({ placeholder: "Search" });
     // Debounce through `cx.timer.after`, not `setTimeout`: a `cx` captured in a
@@ -218,6 +224,7 @@ export default class Files extends View {
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
       this.pending = new Set(); this.marks = {}; this.folderMarks = {}; this.folderErrors = {};
       this.ignored = new Set(); this.git = false;
+      this.names = null; this.nfMap = null; this.nfCollapsed = new Set(); this.nfLoading = false;
       this.show(null); this.watched = null; this.error = null; this.limited = false;
       this.loading = false;
       if (saved?.file) this.show(saved.file, cx);
@@ -226,6 +233,7 @@ export default class Files extends View {
     const context = this.context;
     this.loading = true;
     this.limited = false;
+    this.names = null; // a fresh listing each cycle picks up files the filter must see
     cx.notify();
     cx.spawn(async cx => {
       try {
@@ -281,7 +289,11 @@ export default class Files extends View {
         this.ignored = ignored; this.git = top?.code === 0;
         this.error = null; this.watch(cwd, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
-      finally { if (this.context === context) this.loading = false; cx.notify(); }
+      finally {
+        if (this.context === context) this.loading = false;
+        if (this.view === "files" && this.name.value().trim()) this.scheduleName(cx);
+        cx.notify();
+      }
     });
   }
 
@@ -326,6 +338,91 @@ export default class Files extends View {
       if (i < 0) return false;
       p = p.slice(0, i);
     }
+  }
+
+  // Debounced like the Contents input above: a keystroke must not re-list the worktree.
+  scheduleName(cx) {
+    this.nfTimer?.cancel();
+    const query = this.name.value().trim();
+    if (!query) {
+      this.nfMap = null; this.nfCollapsed = new Set(); this.nfLoading = false;
+      cx.notify();
+      return;
+    }
+    this.nfTimer = cx.timer.after(200, cx => { cx.spawn(cx => this.nameMatches(cx)); });
+  }
+
+  // The listing behind Names: one `git ls-files` (tracked + untracked, ignored included —
+  // the toggle filters later) or `rg --files` outside git, NUL-separated, capped at
+  // Orca's QUICK_OPEN_LISTING_MAX_RESULTS (quick-open-listing-limits.ts:2). Cached per root
+  // so narrowing a query reuses it; every `refresh` drops it for a fresh listing.
+  async fileList() {
+    const key = `${this.root ?? ""}\n${this.git}`;
+    if (this.names?.key === key) return this.names.paths;
+    const root = this.root;
+    if (!root) return [];
+    let paths = [];
+    if (this.git) {
+      const r = await exec("git", ["ls-files", "-z", "-c", "-o"], { cwd: root, on: this.on }).catch(() => null);
+      if (r?.code === 0) paths = r.stdout.split("\0");
+    }
+    if (!paths.length) {
+      const r = await exec("rg", ["--files", "--hidden", "--no-ignore", "--null"], { cwd: root, on: this.on }).catch(() => null);
+      if (r?.code === 0) paths = r.stdout.split("\0").map(p => p.replace(/^\.\//, ""));
+    }
+    // `.git` never enters the tree (directory() skips it).
+    paths = paths.filter(p => p && p !== "." && p !== ".git" && !p.startsWith(".git/")).slice(0, 20001);
+    this.names = { key, paths };
+    return paths;
+  }
+
+  // createNameFilteredFileExplorerProjection (:111-194): a matching file keeps every
+  // ancestor directory; dotfiles and ignored paths follow the same two toggles (:149-154);
+  // all query tokens must appear in the relative path (file-name-filter-tokens.ts:50-60);
+  // over FILE_NAME_FILTER_QUERY_MAX_BYTES (2 KiB) nothing matches (:5).
+  async nameMatches(cx) {
+    const query = this.name.value().trim(), context = this.context;
+    if (!query) { this.nfMap = null; this.nfCollapsed = new Set(); this.nfLoading = false; cx.notify(); return; }
+    const f = filters(this.root);
+    this.nfLoading = true; cx.notify();
+    if (query.length > 2048) { // FILE_NAME_FILTER_QUERY_MAX_BYTES, approximated by string length
+      this.nfMap = new Map(); this.nfLoading = false; cx.notify(); return;
+    }
+    // Tokens are whitespace-split and lowercased by splitFileNameFilterTokens (:15-32).
+    const tokens = query.toLowerCase().split(/\s+/).filter(Boolean), paths = await this.fileList();
+    if (!this.current(context) || this.name.value().trim() !== query) return;
+    const map = new Map(), seen = new Set(), add = (prefix, name, dir) => {
+      const id = `${prefix}\0${name}`;
+      if (seen.has(id)) return;
+      seen.add(id);
+      const list = map.get(prefix) ?? [];
+      list.push({ name, dir }); map.set(prefix, list);
+    };
+    let count = 0;
+    for (const rel of paths) {
+      if (count >= TOTAL) break;
+      if (!f.dotfiles && rel.split("/").some(s => s.length > 1 && s.startsWith("."))) continue;
+      if (!f.ignored && this.isGitIgnored(rel)) continue;
+      if (this.marks[rel] === "D") continue; // the index still lists an unstaged deletion
+      const hay = rel.toLowerCase();
+      if (!tokens.every(token => hay.includes(token))) continue;
+      count++;
+      const parts = rel.split("/");
+      let prefix = "";
+      for (let i = 0; i < parts.length - 1; i++) { add(prefix, parts[i], true); prefix = prefix ? `${prefix}/${parts[i]}` : parts[i]; }
+      add(prefix, parts[parts.length - 1], false);
+    }
+    // appendNameFilteredEntries (:196-205) sorts directories first, then by name.
+    for (const list of map.values()) list.sort((a, b) => a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name));
+    this.nfMap = map; this.nfLoading = false;
+    cx.notify();
+  }
+
+  // nameFilterCollapsedPaths (use-file-explorer-name-filter.ts:15): the filtered tree opens
+  // every ancestor of a match; a click collapses just that branch.
+  nameToggle(path, cx) {
+    if (this.nfCollapsed.has(path)) this.nfCollapsed.delete(path); else this.nfCollapsed.add(path);
+    cx.notify();
   }
 
   // Orca's fallback is `basename(worktreePath)` (FileExplorer.tsx:93); Herdr has no
@@ -441,27 +538,23 @@ export default class Files extends View {
     });
   }
 
-  rows(prefix, depth, out, t) {
+  // `source === "name"` walks `nfMap`, the projection nameMatches built from the worktree
+  // listing; the plain tree walks the loaded folder cache.
+  rows(prefix, depth, out, t, source) {
     if (out.length >= TOTAL || depth > 40) return out;
-    const f = filters(this.root);
-    // FileExplorerViewSwitch.tsx:21-41 — Names filters the tree by path name; Contents
-    // leaves the tree alone and renders rg hits instead.
-    const q = this.view === "files" ? this.name.value().trim().toLowerCase() : "";
-    for (const entry of this.entries.get(prefix) ?? []) {
+    const named = source === "name", f = filters(this.root);
+    for (const entry of (named ? this.nfMap?.get(prefix) : this.entries.get(prefix)) ?? []) {
       if (out.length >= TOTAL) break;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name;
       // Show Dotfiles: Orca drops any dot-prefixed segment (file-explorer-entries.ts:7-14).
-      if (!f.dotfiles && entry.name.length > 1 && entry.name !== ".." && entry.name.startsWith(".")) continue;
+      if (!named && !f.dotfiles && entry.name.length > 1 && entry.name !== ".." && entry.name.startsWith(".")) continue;
       // Show Git Ignored Files: Orca hides ignored paths and their ancestors
-      // (git-path-decoration.ts:90-108).
-      if (!f.ignored && this.isGitIgnored(path)) continue;
-      const open = this.folders.has(path);
-      // A name match keeps its ancestors visible and drops the directories that miss
-      // (file-explorer-name-filter-projection.ts:111-194). shortcut: only loaded
-      // (expanded) folders are searched, where Orca pages unlisted ones; upgrade if
-      // filtering a collapsed tree must find files.
-      const kids = entry.dir && open ? this.rows(path, depth + 1, [], t) : [];
-      if (q && !entry.name.toLowerCase().includes(q) && !kids.length) continue;
+      // (git-path-decoration.ts:90-108). nameMatches already applied both toggles.
+      if (!named && !f.ignored && this.isGitIgnored(path)) continue;
+      // The filtered tree opens every ancestor of a match unless the branch was collapsed
+      // (nameFilterCollapsedPaths, file-explorer-name-filter-projection.ts:206-208).
+      const open = named ? !this.nfCollapsed.has(path) : this.folders.has(path);
+      const kids = entry.dir && open ? this.rows(path, depth + 1, [], t, source) : [];
       // A folder row shows its descendants' dominant status when it has no mark of its own
       // (buildFolderStatusMap, git-path-decoration.ts:53-88; FileExplorerVirtualRows.tsx:170-176).
       const mark = this.marks[path] ?? (entry.dir ? this.folderMarks[path] : undefined);
@@ -483,7 +576,7 @@ export default class Files extends View {
       out.push(h_flex().id(`file-${path}`).w_full().h(26).flex_none().pl(8 + depth * 16).pr(8).gap(4).items_center().rounded(2).text_size(12).cursor_pointer()
         .when(this.file === path, el => el.bg(fade(t.accent, 0.7)).border_1().border_color(t.border).text_color(t.accent_foreground).hover(s => s.bg(fade(t.accent, 0.8))))
         .when(this.file !== path, el => el.hover(s => s.bg(t.accent)))
-        .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.show(path, cx))
+        .on_click((_e, cx) => entry.dir ? (named ? this.nameToggle(path, cx) : this.toggle(path, cx)) : this.show(path, cx))
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); this.menu(path, entry); })
         .child(entry.dir ? svg(`mods/orca-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(icon)
@@ -610,10 +703,14 @@ export default class Files extends View {
         .child(svg("mods/orca-files/list-filter.svg").size(14).flex_none().text_color(t.muted))
         .child(Input.new(input).flex_1().min_w(0).text_size(12).text_color(t.foreground).bg("#00000000"))
         // FileExplorerNameFilter.tsx:47-62 / SearchQueryRow.tsx:50-51 — Loader2 while the
-        // search runs, X clears the active input.
-        .when(search && this.searching, el => el.child(svg("mods/orca-files/loader-circle.svg").size(12).flex_none().text_color(t.muted).spin(1000)))
+        // listing or the search runs; X clears the active input and its projection.
+        .when((search && this.searching) || (!search && this.nfLoading), el => el.child(svg("mods/orca-files/loader-circle.svg").size(12).flex_none().text_color(t.muted).spin(1000)))
         .when(Boolean(input.value().trim()), el => el.child(div().id("files-clear").p(2).flex_none().rounded(6).cursor_pointer().text_color(t.muted).hover(s => s.text_color(t.foreground))
-          .on_click((_e, cx) => { input.set_value(""); this.hits = null; this.searching = false; cx.notify(); })
+          .on_click((_e, cx) => {
+            input.set_value(""); this.hits = null; this.searching = false;
+            this.nfMap = null; this.nfCollapsed = new Set(); this.nfLoading = false;
+            cx.notify();
+          })
           .child(svg("mods/orca-files/x.svg").size(12)))));
   }
 
@@ -646,12 +743,18 @@ export default class Files extends View {
                 .child(div().flex_1().min_w(0).truncate().text_size(12).child(h.text))
                 .child(div().flex_none().text_size(11).text_color(t.dim).child(`${h.file}:${h.line}`)))
             : []
-          : this.rows("", 0, [], t))
+          : this.name.value().trim()
+            ? this.rows("", 0, [], t, "name")
+            : this.rows("", 0, [], t))
+        // FileExplorerFilesTreePane.tsx:116-136 — with a name filter the empty state is a
+        // Loader2 while the listing is pending, then "No files match this filter".
+        .when(this.view === "files" && Boolean(this.name.value().trim()) && !this.nfMap && this.nfLoading, el => el.child(div().flex_1().flex().items_center().justify_center().child(svg("mods/orca-files/loader-circle.svg").size(16).flex_none().text_color(t.muted).spin(1000))))
+        .when(this.view === "files" && Boolean(this.name.value().trim()) && this.nfMap?.size === 0, el => el.child(div().flex_1().flex().items_center().justify_center().px(16).text_center().text_size(11).text_color(t.muted).child("No files match this filter")))
         // FileExplorerTreeStatus.tsx:38-95, FileExplorerFilesTreePane.tsx:131-135 — every empty
         // state is a centred 11px muted line; loading is a bare 16px Loader2. The contents-search
         // no-results copy is SearchResultsPane.tsx:153-158.
         .when(this.view === "search" && this.hits && !this.hits.length && !this.searching, el => el.child(div().flex_1().flex().items_center().justify_center().px(16).text_center().text_size(11).text_color(t.muted).child("No results. Try another search or adjust your filters.")))
-        .when(this.view !== "search" && (this.error || !this.entries.get("")?.length), el => el.child(this.error
+        .when(this.view === "files" && !this.name.value().trim() && (this.error || !this.entries.get("")?.length), el => el.child(this.error
           ? div().flex_1().flex().items_center().justify_center().px(16).text_center().text_size(11).text_color(t.muted).child(`Could not load files for this workspace: ${this.error}`)
           : this.loading ? div().flex_1().flex().items_center().justify_center().child(svg("mods/orca-files/loader-circle.svg").size(16).flex_none().text_color(t.muted).spin(1000))
           : div().flex_1().flex().items_center().justify_center().px(16).text_center().text_size(11).text_color(t.muted).child(this.root ? "No files in this workspace" : "Select a workspace to browse files")))
