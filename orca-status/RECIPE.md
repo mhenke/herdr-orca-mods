@@ -1,6 +1,6 @@
 # Orca Status
 
-An Orca-style 24px bottom status bar mod for Herdr App: Git branch badge, dirty working tree counter, ahead/behind sync indicators, and real-time aggregated agent execution status.
+An Orca-style 24px bottom status bar for Herdr App. It spans the bottom of the window with your active Git branch, dirty file count, ahead/behind sync stats, and real-time agent execution status so you can tell what your tools are doing at a glance.
 
 ![Orca Status](preview.png)
 

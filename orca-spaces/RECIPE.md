@@ -1,6 +1,6 @@
 # Orca Spaces
 
-An Orca-style workspace and project group sidebar mod for Herdr App: repositories organized into collapsible project headers, worktrees rendered as cards carrying branch identities, positional `primary` badges on main checkouts, aggregated agent status marks (`working`, `blocked`, `done`, `idle`), and a global collapse-all toggle.
+An Orca-style worktree and project sidebar for Herdr App. Repositories organize into collapsible groups with folder headers, worktree cards carrying branch identities, and automatic `primary` badges on main checkouts. Linked worktrees indent 18px underneath, and cards reflect live agent status across four priority states (working, blocked, done, idle).
 
 ![Orca Spaces](preview.png)
 

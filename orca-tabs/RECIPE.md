@@ -1,6 +1,6 @@
 # Orca Tabs
 
-An Orca-style flat tab strip mod for Herdr App: flat full-bleed tabs with active 2px bottom underline indicators, program/terminal icon prefixes, hover close buttons, window drag zones, and a built-in sidebar collapse/expand toggle.
+An Orca-style flat tab strip for Herdr App. Tabs sit flat with a full-width 2px bottom underline on the active tab, program icons, close buttons, and tab color dots synced with the menu store. It also includes an integrated sidebar toggle button at the far left so you can show or hide the sidebar anytime.
 
 ![Orca Tabs](preview.png)
 

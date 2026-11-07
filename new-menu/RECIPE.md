@@ -1,6 +1,6 @@
 # Orca New Menu
 
-An Orca-style 288px create dropdown overlay for Herdr App: instant launcher for creating new terminal tabs, launching coding agents (OpenCode, Antigravity, Claude Code, Codex), opening existing folders, or initializing Git worktrees.
+An Orca-style 288px create dropdown for Herdr App. A single click opens a quick popup to launch coding agents (OpenCode, Antigravity, Claude Code, Codex), open new terminal tabs, pick folders, or spin up Git worktrees.
 
 ![Orca New Menu](preview.png)
 

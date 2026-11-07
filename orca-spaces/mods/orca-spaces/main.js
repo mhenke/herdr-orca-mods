@@ -37,7 +37,15 @@ export default class Spaces extends View {
         // A popup over this mod hands focus back when it closes, so the header cluster can stop
         // being held visible for `has-[button[aria-expanded=true]]`
         // (`worktree-list/rows/ProjectHeaderActions.tsx:5-15`) — Herdr has no expanded attribute.
-        if (cmd === "focus") { this.menuKey = null; enter(this, cx, "space-new"); }
+        if (cmd === "focus") {
+          this.menuKey = null;
+          // The "Spaces" heading that owned `space-new` was removed in aa54e29, so the id names
+          // no control: pane.go landed on a dangling handle. The first drawn group header's New
+          // space button is the nearest stop; `header()` emits it on every headed row and
+          // `repo-header-project-actions.tsx:250` names the create button.
+          const first = this.ordered().find((r) => r.head);
+          if (first) enter(this, cx, `space-new-${first.w.id}`);
+        }
         // `project-collapse-all.ts` setAllProjectsCollapsed: collapsing adds every project key;
         // expanding clears all project keys (nested ones included), keeping machine folds.
         // Keys are the same ones `header()` folds on: repo name, or `space:<id>` for a folder.
@@ -583,7 +591,7 @@ export default class Spaces extends View {
           .when(connected, el => el.child(tip(this.hot, t, `machine-add-${m ?? "local"}`, "New space here", stop(this, t, `machine-add-${m ?? "local"}`, div().id(`machine-add-${m ?? "local"}`).w(26).h(20).flex_none().flex().items_center().justify_center().rounded(4)
             .text_color(this.hot === `machine-add-${m ?? "local"}` ? t.foreground : t.dim).on_hover(this.glow(`machine-add-${m ?? "local"}`))
             .role("button").accessibility_label("New space here")
-            .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { machine: m ?? "" }); }).child(svg("mods/orca-spaces/plus.svg").size(12)), 4),
+            .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { machine: m ?? "" }); run("layout.select", { stack: "main", child: "main-terminals" }); }).child(svg("mods/orca-spaces/plus.svg").size(12)), 4),
             // The key makes a space on the current space's machine: it names this + only on that one.
             { action: (spaces().find(s => s.active)?.machine ?? null) === m ? "space.new" : null })))
           // An indicator, not a button: the whole row folds, so it lights with the row and has no label of its own.
@@ -715,9 +723,9 @@ export default class Spaces extends View {
           div().size(20).flex_none().flex().items_center().justify_center().rounded(6)
             .role("button").accessibility_label("New space")
             .text_color(t.muted).hover((s) => s.bg("#404040b3").text_color(t.foreground))
-            .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { folder: g?.top ?? w.folder }); })
+            .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { folder: g?.top ?? w.folder, machine: w.machine ?? "" }); run("layout.select", { stack: "main", child: "main-terminals" }); })
             .child(svg("mods/orca-spaces/plus.svg").size(12).flex_none()),
-          6, { enter: () => run("space.new", { folder: g?.top ?? w.folder }) }))), 6,
+          6, { enter: () => { run("space.new", { folder: g?.top ?? w.folder, machine: w.machine ?? "" }); run("layout.select", { stack: "main", child: "main-terminals" }); } }))), 6,
       { enter: () => this.toggleRepo(key) });
   }
 
@@ -923,7 +931,7 @@ export default class Spaces extends View {
         }
       })
       .on_mouse_up("left", (e, cx) => {
-        if (unopened) { run("space.new", { folder: g.top, machine: w.machine ?? undefined }); cx.notify(); return; }
+        if (unopened) { run("space.new", { folder: g.top, machine: w.machine ?? "" }); run("layout.select", { stack: "main", child: "main-terminals" }); cx.notify(); return; }
         // Orca's card double-click opens the rename editor: `worktree-card-surface.tsx:98`
         // `onDoubleClick={...handleDoubleClick}` -> `use-worktree-card-activation-actions.ts`
         // `openModal('edit-meta', ...)` with `currentDisplayName`. Herdr's equivalent is
@@ -944,7 +952,7 @@ export default class Spaces extends View {
         if (from !== null && over === w.id && from !== w.id) {
           const index = spaces().findIndex(s => s.id === w.id);
           if (index !== -1) run("space.move", { id: from, index: index + 1 });
-        } else if (from === w.id) run("space.select", { id: w.id });
+        } else if (from === w.id) { run("space.select", { id: w.id }); run("layout.select", { stack: "main", child: "main-terminals" }); }
         cx.notify();
       })
       .on_mouse_down("right", () => this.menu(w))
@@ -991,7 +999,7 @@ export default class Spaces extends View {
           .when(mine.length > 0, el => el.child(agentBlock))),
       ),
       // A worktree with no space opens one in its folder; anything else selects the space.
-      8, { enter: () => unopened ? run("space.new", { folder: g.top, machine: w.machine ?? undefined }) : run("space.select", { id: w.id }) });
+      8, { enter: () => { if (unopened) { run("space.new", { folder: g.top, machine: w.machine ?? "" }); } else { run("space.select", { id: w.id }); } run("layout.select", { stack: "main", child: "main-terminals" }); } });
   }
 
   // A repo is a project group: a SectionHeader, then its worktree cards. A bare folder
@@ -1067,7 +1075,7 @@ export default class Spaces extends View {
           
           .on_click((_e, cx) => {
             cx.spawn(async () => {
-              run("space.new", { folder });
+              run("space.new", { folder }); run("layout.select", { stack: "main", child: "main-terminals" });
             });
           })
           .child(svg("mods/orca-spaces/folder.svg").size(14).flex_none())

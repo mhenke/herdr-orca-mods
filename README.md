@@ -1,29 +1,31 @@
 # Herdr Orca Mods
 
-A collection of [Orca](https://github.com/stablyai/orca)-inspired standalone mods for [Herdr App](https://herdr.dev).
+Standalone mods ported from [Orca](https://github.com/stablyai/orca) for [Herdr App](https://herdr.dev).
 
-Every mod in this repository is self-contained and can be dropped into any Herdr layout to upgrade specific window panels with Orca's aesthetics, geometry, and behaviors.
+If you already have a Herdr layout you like (such as the default `main` layout or `herdr-t3`), but want Orca's file tree, Git staging panel, worktree grouping, or flat tabs, you can drop any of these mods right into your existing setup without adopting the full Orca layout.
 
-## Included Mods
+Every mod here is self-contained. Each folder includes its own code, SVG icons, and a complete recipe.
 
-| Mod | Category | Description |
-|---|---|---|
-| [`orca-files/`](orca-files/) | Explorer | Full-bleed file explorer tree with 30+ extension icons, a Names/Contents switch over one debounced input, and Git status rollups. |
-| [`orca-changes/`](orca-changes/) | Source Control | Git changes inspector with staged/unstaged partitioning, diff viewer, and commit composer. |
-| [`orca-spaces/`](orca-spaces/) | Sidebar | Project group hierarchy, worktree cards with primary badge, and aggregated agent status marks. |
-| [`new-menu/`](new-menu/) | Launcher | 288px create dropdown for launching agents, opening folders, and creating worktrees. |
-| [`orca-tabs/`](orca-tabs/) | Chrome | Flat tabs strip with 2px bottom active underline indicator and sidebar toggle. |
-| [`orca-status/`](orca-status/) | Status | Minimal 24px bottom status bar with git indicators and agent turn status. |
+## Available mods
 
-## Installing a Mod
+| Mod | What it does |
+|---|---|
+| [`orca-files/`](orca-files/) | Full-bleed file tree with 30+ extension icons, a Names filter, a regex and glob Contents search, and Git status rollups. |
+| [`orca-changes/`](orca-changes/) | Git changes inspector with staged and unstaged file lists, per-file diff views, and an inline commit composer. |
+| [`orca-spaces/`](orca-spaces/) | Worktree sidebar with collapsible project headers, primary badges on main checkouts, and live agent status marks. |
+| [`new-menu/`](new-menu/) | 288px create dropdown for launching agents (OpenCode, Antigravity, Claude Code, Codex), opening folders, or adding Git worktrees. |
+| [`orca-tabs/`](orca-tabs/) | Flat tab strip with full-width 2px bottom underline indicators, tab color dots, and an integrated sidebar toggle button. |
+| [`orca-status/`](orca-status/) | Slim 24px bottom status bar showing your branch, dirty file count, ahead/behind sync stats, and active agent status. |
 
-To add any mod to your Herdr App setup:
+## How to use a mod
 
-1. Copy the `mods/<name>/` folder into your Herdr config directory:
+Adding a mod to your setup takes three quick steps:
+
+1. Copy the mod folder into your Herdr directory (`~/.config/herdr-app/mods/`):
    ```sh
    cp -r <mod-folder>/mods/<name> ~/.config/herdr-app/mods/
    ```
-2. Reference the mod name in your layout JSON (e.g. `~/.config/herdr-app/layouts/<name>.json`) inside any block's content:
+2. Reference the mod name in your layout JSON (e.g. `~/.config/herdr-app/layouts/my-layout.json`) inside any block:
    ```json
    {
      "type": "block",
@@ -32,8 +34,15 @@ To add any mod to your Herdr App setup:
      }
    }
    ```
-3. Test with `herdr-app check ~/.config/herdr-app/mods/<name>`.
+3. Verify the mod loads cleanly:
+   ```sh
+   herdr-app check ~/.config/herdr-app/mods/<name>
+   ```
 
 ## Recipes
 
-Each mod contains a `RECIPE.md` detailing its exact geometry, behaviors, Herdr API contracts, and verification criteria following the Herdr Community specification.
+Every mod folder includes a `RECIPE.md` written to Herdr Community standards. It details the exact geometry, behaviors, Herdr API contracts, and verification checks needed to build or adapt the mod from scratch.
+
+## Credits and license
+
+Ported from [stablyai/orca](https://github.com/stablyai/orca) (MIT License, Copyright Orca). Licensed under Apache-2.0, matching Herdr App.

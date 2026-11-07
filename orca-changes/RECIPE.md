@@ -1,6 +1,6 @@
 # Orca Changes
 
-An Orca-style Git changes and staging inspector panel for Herdr App: partitioned staged and unstaged file lists, interactive diff inspection, per-file stage/unstage/discard controls, and an inline commit message composer with direct commit execution.
+An Orca-style Git changes inspector for Herdr App. It splits your modified files into staged and unstaged lists, lets you inspect diffs file by file, stage or discard specific edits, and write commit messages right in the panel with `Ctrl+Enter` to commit.
 
 ![Orca Changes](preview.png)
 

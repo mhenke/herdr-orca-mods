@@ -35,7 +35,7 @@ export default class OrcaStatus extends View {
     const segment = (id, iconName, label, opts = {}) => h_flex()
       .id(id).gap(6).px(4).py(2).rounded(4).items_center().text_size(11)
       .text_color(opts.muted ? t.muted : t.foreground)
-      .when(Boolean(opts.on), el => el.role("button").accessibility_label(label)
+      .when(Boolean(opts.on), el => el.role("button").accessibility_label(label).tooltip(label)
         .cursor_pointer().hover(s => s.bg("#404040b3").text_color(t.foreground)).on_click(opts.on))
       .child(svg(`mods/orca-status/${iconName}.svg`).size(12).flex_none()
         .text_color(opts.iconColor ?? t.muted)
