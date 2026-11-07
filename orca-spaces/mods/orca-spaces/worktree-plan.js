@@ -103,31 +103,42 @@ export function projectWorktreePlan({
     ok: isDiscoverable(w),
   }));
 
-  // Orca rows represent repository worktrees (listRepoWorktrees), not only active sessions.
-  // git.cache.v1 hydrates known repositories on launch (hydrated-worktree-purge.ts:19-31);
-  // unopened repositories and worktrees render cards that open a space on click.
+  // Orca's projects are repos, not sessions (`listRepoWorktrees`): a group exists because the
+  // repo is known, and its rows are `git worktree list` — main first
+  // (`orderMainWorktreeFirst`, section-order.ts:4-16). What is open must not decide this: all
+  // of a repo's spaces can be linked worktrees, and the main checkout still has a card.
   const open = new Set(sp.map((w) => getWhere(w)));
+  const anchored = new Set();
+  const mainRows = [];
   for (const key of Object.keys(gitState)) {
     const g = gitState[key];
-    if (!g || open.has(key) || g.linked) continue;
-    const [on, cwd] = readPair(key);
-    rows.push({
+    if (!g || anchored.has(g.repo)) continue;
+    anchored.add(g.repo);
+    // An older cache entry has no worktree list; a non-linked one is its own main checkout.
+    const main = g.worktrees?.[0] ?? (g.linked ? null : { path: readPair(key)[1], branch: g.branch });
+    if (!main?.path) continue;
+    const [on] = readPair(key);
+    const mainKey = JSON.stringify([on ?? null, main.path]);
+    if (open.has(mainKey)) continue;
+    mainRows.push({
       w: {
-        id: `repo:${key}`,
+        id: `repo:${mainKey}`,
         name: g.name,
         named: false,
         tabs: [],
         active: false,
         status: null,
         machine: on ?? null,
-        folder: cwd,
+        folder: main.path,
       },
       i: -1,
-      g,
+      g: { ...g, top: main.path, linked: false, branch: main.branch ?? g.branch },
       ok: true,
       unopened: true,
     });
   }
+  // Main first inside its group (`[...main, ...rest]`), before the spaces opened on it.
+  rows.unshift(...mainRows);
 
   // A repo worktree is one card: `linked` worktrees and second same-checkout spaces fold
   // into the first space on that top-level folder. Folder spaces merge only with themselves.

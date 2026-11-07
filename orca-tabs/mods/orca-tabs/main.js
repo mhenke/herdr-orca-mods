@@ -291,16 +291,16 @@ export default class Tabs extends View {
           if (z) run("pane.zoom", { pane: z.pane });
         })
         .child(svg("mods/orca-tabs/minimize-2.svg").size(14))))
-      // TitlebarMainStrip.tsx:76 — `RightSidebarToggle` shows only while the sidebar is closed
-      // (`showRightSidebarControls && !rightSidebarOpen`); the open panel draws its own close
-      // button (`right-sidebar/index.tsx:135`). Herdr's panel is a layout node, so its `hidden`
-      // flag is the same test and `layout.toggle` (commands.rs:77) is the action.
-      .when(Boolean(panel?.hidden), el => el.child(panelToggle(() => run("layout.toggle", { id: "panel" }))))
-      // WindowControls.tsx:27-30,42-49,60-67 — Linux and Windows both replace native chrome with
-      // the same 10x10 SVG paths; only macOS keeps its traffic lights. `window().buttons` is
-      // false when the platform draws its own titlebar, in which case drawing them here would
-      // paint two sets. Uses the cached `windowState` so the strip renders on first paint.
-      .when(w.buttons && w.platform !== "macos", el => el.child(h_flex().h_full().items_center()
+      // TitlebarMainStrip.tsx:76 — Orca's `RightSidebarToggle` moves into the panel header
+      // while the panel is open (`right-sidebar/index.tsx:124-144` draws the same button as its
+      // close control). Keeping one fixed slot is better here: the control never moves, and
+      // `layout.toggle` (commands.rs:77) is the action either way.
+      .child(panelToggle(() => run("layout.toggle", { id: "panel" })))
+      // WindowControls.tsx:27-30,42-49,60-67 — Orca replaces native chrome on Linux and Windows
+      // with the same 10x10 SVG paths; only macOS keeps its traffic lights. Herdr reports
+      // `buttons: false` here (the compositor owns decorations) but draws none of its own, so
+      // the strip is the only place these actions exist — draw them on every non-macOS window.
+      .when(w.platform !== "macos", el => el.child(h_flex().h_full().items_center()
         .child(winBtn("minimize", "Minimize", svg("mods/orca-tabs/win-min.svg").size(10), () => run("window.minimize"), false))
         .child(winBtn("maximize", "Maximize", svg(`mods/orca-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(10), () => run("window.maximize"), false))
         .child(winBtn("close-window", "Close window", svg("mods/orca-tabs/win-close.svg").size(10), () => run("window.close"), true))));

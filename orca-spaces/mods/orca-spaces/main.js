@@ -53,12 +53,15 @@ export default class Spaces extends View {
       }
     });
     // where() -> { name, branch, owner, repo, linked }, null: not a repo.
+    // v2: v1 stored no `worktrees` for a space opened on a linked worktree, so the plan
+    // could not name that repo's main checkout or its siblings. Retire those entries rather
+    // than trust a shape the plan can no longer anchor a group on.
     // Seeded from the last session, the Herdr equivalent of the project list Orca hydrates
     // from its persisted store (`sidebar/index.tsx:69` reads `s.repos`;
     // `main/persistence/loading-store/store.ts:68` owns it). Herdr exposes no project catalog
     // (`defaults/herdr.d.ts`), so a repo no `exec` has ever probed is unreachable; this cache
     // is seeded whenever a space's git is read, and rows paint from it while refresh runs.
-    this.git = stored("git.cache.v1", {});
+    this.git = stored("git.cache.v2", {});
     // Orca keeps reviews out of the worktree row: `buildWorkspaceReviewFacts` reads a
     // persisted cache keyed `repo::branch` (`getGitHubPRCacheKeyCandidates`) and the card
     // draws whatever sits there. Nothing is fetched while rendering. Same shape here:
@@ -147,7 +150,10 @@ export default class Spaces extends View {
     const now2 = { spaces: sp.map((s) => `${s.id}:${s.status}`).join(","), agents: agents().map((a) => `${a.address}:${a.status}`).join(",") };
     const changed = now2.spaces !== this.statusSeen?.spaces || now2.agents !== this.statusSeen?.agents;
     this.statusSeen = now2;
-    if (changed) cx.notify();
+    // A git pass writes `this.git` one place at a time; painting mid-pass shows a half-filled
+    // list, which is the sidebar's visible jitter. The pass notifies once when it commits, so
+    // the status change can wait for it.
+    if (changed && !this.refreshing) cx.notify();
   }
 
   // Places whose git could have changed: new ones (a new space, a cd), where a
@@ -263,7 +269,7 @@ export default class Spaces extends View {
       this.refreshing = false;
       this.loaded = true;
       // The refresh is the only writer, so one write per completed pass is enough.
-      localStorage.setItem("git.cache.v1", JSON.stringify(this.git));
+      localStorage.setItem("git.cache.v2", JSON.stringify(this.git));
       cx.notify();
     });
   }
@@ -338,12 +344,12 @@ export default class Spaces extends View {
       // each worktree's own branch up in a persisted PR cache; the row never carries a PR to
       // be inherited by other worktrees. Ask for this exact branch, and only on this machine.
       if (!on && info.branch) this.lookupPRByBranch(`${repo}::${info.branch}`, info.base, info.head, info.branch, cwd, cx);
-      // Orca's rows are the repo's worktrees (`listRepoWorktrees`), not its open sessions, so an
-      // unopened worktree still draws a card. Record each one; rows without a space open in it on click.
-      if (!info.linked) {
-        const wt = await exec("git", ["worktree", "list", "--porcelain"], { cwd, on });
-        info.worktrees = wt.code === 0 ? parseWorktreeList(wt.stdout) : [];
-      }
+      // Orca's rows are the repo's worktrees (`listRepoWorktrees`), not its open sessions. A
+      // repo is one group whether the open space is the main checkout or a linked worktree —
+      // `git worktree list` answers for both — so read it every time. Without this, a repo
+      // opened only on linked worktrees could never show its main checkout or its siblings.
+      const wt = await exec("git", ["worktree", "list", "--porcelain"], { cwd, on });
+      info.worktrees = wt.code === 0 ? parseWorktreeList(wt.stdout) : [];
       if (!on) this.watch(repo, cx);
     } catch (err) {
       // Couldn't ask (the machine is away): keep what it showed, look again later.
@@ -1093,13 +1099,14 @@ export default class Spaces extends View {
     const tool = (id, label, icon, fn, more) => tip(this.hot, t, id, label, stop(this, t, id, div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(this.hot === id ? t.foreground : t.dim).on_hover(this.glow(id)).role("button").accessibility_label(label).hover(s => s.bg(t.hover))
       .on_click(fn).child(svg(`mods/orca-spaces/${icon}.svg`).size(14))), more);
     return focusRoot(this, v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
-      // Gutter port of Orca's sidebar scrollbar: `.worktree-sidebar-scrollbar` reserves an 8px
-      // bar plus `padding-right: 4px` (`main.css:767-781`), so no row ever sits under the thumb.
-      // A placed Herdr bar fills the container it is put in (`gpui-kit.d.ts:21188-21218`) and
-      // `overflow_y_scroll` — not `overflow_y_scrollbar` — is the area a named bar pairs with;
-      // the row gives the area the height `flex_1` alone lacked, and the 12px column is the inset.
-      .child(h_flex().w_full().flex_1().min_h(0)
-        .child(v_flex().id("space-list").flex_1().min_h(0).overflow_y_scroll()
+      // Orca's sidebar bar is an 8px webkit scrollbar with `padding-right: 4px`
+      // (`main.css:767-781`), transparent until the sidebar is hovered (`:781-800`). A webkit
+      // bar takes layout width, so no row sits under it. Herdr's placed bar fills the box it is
+      // put in (`gpui-kit.d.ts:21188-21218`) and the shipped `changes` mod paints one over the
+      // scroll area (`defaults/mods/changes/main.js:196`); the same shape here, with the 12px
+      // inset on the content, keeps rows clear of the thumb.
+      .child(div().w_full().flex_1().min_h(0).relative()
+        .child(v_flex().id("space-list").absolute().inset_0().overflow_y_scroll()
           .on_mouse_up("left", (_e, cx) => { this.pressed = this.over = null; cx.notify(); })
           // Herdr reports no release outside the sidebar, so leaving ends a drag, as in the inbox.
           .on_hover((on, cx) => {
@@ -1108,7 +1115,7 @@ export default class Spaces extends View {
             this.pressed = this.over = null;
             cx.notify();
           })
-          .child(v_flex().id("space-content").w_full().flex_none().px(0).pb(8)
+          .child(v_flex().id("space-content").w_full().flex_none().pr(12).pb(8)
             // StartupWorktreeRefreshStatus.tsx:22-29 status row with mx-3 mb-2 gap-2 text-xs text-muted-foreground.
             // StartupWorktreeRefreshStatus.tsx:14-16 delays 200ms before showing; omitted because Herdr has no frame timer.
             .when(!this.loaded, el => el.child(h_flex().flex_none().mx(12).mb(8).gap(8).items_center()
@@ -1127,9 +1134,8 @@ export default class Spaces extends View {
             .when(savedRows.length > 0, el => el.child(v_flex().flex_none().w_full().mt(8).gap(4)
               .child(div().text_size(11).text_color("#6a6a6a").child("Saved Projects"))
               .children(savedRows)))))
-        // Orca's thumb is transparent until the sidebar is hovered (`main.css:781-800`); the
-        // list's `.on_hover` flips the bar to `always`, so the reveal is the same.
-        .child(div().w(12).flex_none().relative()
-          .child(Scrollbar.vertical("space-list").mode(this.listHover ? "always" : "hover")))));
+        // The list's `.on_hover` flips the bar to `always`; Orca reveals on the sidebar's hover
+        // (`main.css:781-800`), and the bar's own `hover` mode only sees the bar itself.
+        .child(Scrollbar.vertical("space-list").mode(this.listHover ? "always" : "hover").absolute().inset_0())));
   }
 }
