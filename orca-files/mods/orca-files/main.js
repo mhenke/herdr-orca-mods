@@ -4,12 +4,16 @@ import { v_flex, h_flex, Input, InputState, Editor, EditorState } from "gpui-bas
 import { spaces, panes, focused, exec, readTextFile, writeTextFile, watchFolder, theme, settings, window, props, run, openOverlay, closeOverlay, shared, setShared, nextCommand } from "herdr";
 import { copyText, reveal } from "./clip.js";
 
+// Reads write nothing under .git (no index refresh or lock, no fsmonitor cookie):
+// the folder watch would see it, and every refresh would start the next one.
+const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
+
+// Orca scopes the panel to the project, not to whatever folder the focused
+// terminal happens to sit in: a terminal in /tmp must not empty the tree.
 function location() {
-  const space = spaces().find(s => s.active), f = focused();
-  const pane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
+  const space = (spaces() ?? []).find(s => s.active), f = focused();
+  const pane = f?.pane ? (panes() ?? []).find(p => p.pane === f.pane) : null;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
-  // Orca scopes the panel to the project, not to whatever folder the focused
-  // terminal happens to sit in: a terminal in /tmp must not empty the tree.
   const live = pane?.cwd || f?.cwd;
   const project = space?.folder || live;
   const cwd = live && project && !(live.startsWith(project + "/") || live === project) ? project : live || project;
@@ -241,7 +245,7 @@ export default class Files extends View {
           if (!this.current(context)) return;
           await this.loadFolder(path, context);
         }
-        const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }).catch(() => null);
+        const top = await exec("git", [...READ, "rev-parse", "--show-toplevel"], { cwd, on }).catch(() => null);
         // Status keys are relative to `this.root`, as Orca looks them up by `relativePath`
         // (FileExplorerVirtualRows.tsx:198-232): the tree root is the focused pane's folder,
         // which can sit below the repo root `git rev-parse` reports.
@@ -251,7 +255,7 @@ export default class Files extends View {
         if (top?.code === 0) {
           // --ignored: Orca draws ignored rows with CircleSlash (FileExplorerRow.tsx:258-267).
           // Renames stay on so R/C rows reach the parser (git-status-porcelain-parser.ts:127-150).
-          const status = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], { cwd, on }).catch(() => null);
+          const status = await exec("git", [...READ, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], { cwd, on }).catch(() => null);
           if (status?.code === 0) {
             const fields = status.stdout.split("\0").filter(Boolean);
             for (let i = 0; i < fields.length && i < TOTAL; i++) {
@@ -363,7 +367,7 @@ export default class Files extends View {
     if (!root) return [];
     let paths = [];
     if (this.git) {
-      const r = await exec("git", ["ls-files", "-z", "-c", "-o"], { cwd: root, on: this.on }).catch(() => null);
+      const r = await exec("git", [...READ, "ls-files", "-z", "-c", "-o"], { cwd: root, on: this.on }).catch(() => null);
       if (r?.code === 0) paths = r.stdout.split("\0");
     }
     if (!paths.length) {

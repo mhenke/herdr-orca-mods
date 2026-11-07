@@ -2,14 +2,16 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
 import { spaces, panes, focused, exec, watchFolder, theme } from "herdr";
 
+// Orca scopes the panel to the project, not to whatever folder the focused
+// terminal happens to sit in: a terminal in /tmp must not empty the tree.
 function location() {
-  const space = spaces().find((s) => s.active), f = focused();
-  const pane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
+  const space = (spaces() ?? []).find(s => s.active), f = focused();
+  const pane = f?.pane ? (panes() ?? []).find(p => p.pane === f.pane) : null;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
-  // Changes follow the project, not an unrelated terminal folder.
-  const live = pane?.cwd || f?.cwd, project = space?.folder || live;
+  const live = pane?.cwd || f?.cwd;
+  const project = space?.folder || live;
   const cwd = live && project && !(live.startsWith(project + "/") || live === project) ? project : live || project;
-  return { cwd, on };
+  return { cwd, on, space: space?.id };
 }
 const key = () => JSON.stringify(location());
 // Reads write nothing under .git (no index refresh or lock, no fsmonitor cookie):
@@ -18,16 +20,14 @@ const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.a
 // Pathspecs stay under the arg limit while keeping one index write per batch.
 const chunks = (paths, size = 200) => Array.from({ length: Math.ceil(paths.length / size) }, (_, i) => paths.slice(i * size, i * size + size));
 
-
-
 // Git decoration tones, `git-path-decoration.ts:5-12` -> main.css:489-496 (dark).
 function gitTone(mark, t) {
   switch (mark) {
-    case "A": return "#81b88b";
-    case "D": return "#c74e39";
-    case "M": return "#e2c08d";
-    case "R": case "U": case "C": return "#73c991";
-    case "!": return "#808080";
+    case "A": return "#81b88b";               // added
+    case "D": return "#c74e39";               // deleted
+    case "M": return "#e2c08d";               // modified
+    case "R": case "U": case "C": return "#73c991"; // renamed / untracked / copied
+    case "!": return "#808080";               // ignored
     default: return t.dim;
   }
 }
@@ -73,7 +73,7 @@ export default class Changes extends View {
     this.loading = true;
     cx.spawn(async (cx) => {
       try {
-        const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
+        const top = await exec("git", [...READ, "rev-parse", "--show-toplevel"], { cwd, on });
         if (key() !== context) return;
         if (top.code !== 0) { this.root = null; this.files = []; this.error = "Source Control is only available for Git repositories"; return; }
         const root = top.stdout.trim(), git = (args) => exec("git", [...READ, ...args], { cwd: root, on });

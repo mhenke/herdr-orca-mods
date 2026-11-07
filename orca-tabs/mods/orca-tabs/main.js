@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, exec, run, openOverlay, theme, window, shared, layout, settings, setShared } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, setShared } from "herdr";
 
 // `src/shared/agent-status/title/agent-title-decoration.ts`: the tab already shows the
 // provider icon, so a known agent's own leading status glyph is dropped. Glyph-only titles
@@ -21,22 +21,7 @@ function find(node, id) {
   return null;
 }
 
-// Files always; Changes only in a git repo (Orca: gitOnly). The probe runs inside `cx.spawn`
-// so it uses the continuation's `cx`, never render's — a `cx` is valid only for the call that
-// made it, and `cx.notify()` after an `await` on render's `cx` throws.
-let gitCache = { cwd: null, at: 0, ok: false };
-function gitRepo(cwd, cx) {
-  if (!cwd) return false;
-  if (gitCache.cwd === cwd && Date.now() - gitCache.at < 5000) return gitCache.ok;
-  const cached = gitCache.ok;
-  gitCache = { cwd, at: Date.now(), ok: cached };
-  cx.spawn(async (cx) => {
-    const r = await exec("git", ["rev-parse", "--show-toplevel"], { cwd }).catch(() => null);
-    gitCache = { cwd, at: Date.now(), ok: r?.code === 0 };
-    cx.notify();
-  });
-  return cached;
-}
+
 
 export default class Tabs extends View {
   init(_props, cx) {
@@ -112,6 +97,17 @@ export default class Tabs extends View {
     const t = theme();
     const space = (spaces() ?? []).find(p => p.active);
     const shown = space?.tabs ?? [];
+    // Tab colour store, read once per render. orca-menu writes
+    // localStorage["tab.colors.v1"] = { "<tabId>": "#rrggbb" }; a missing key or empty
+    // string means the tab has no colour. SortableTab.tsx:293-297 drives the dot below.
+    const tabColorStore = (() => {
+      try {
+        const v = localStorage.getItem("tab.colors.v1");
+        return v ? JSON.parse(v) : {};
+      } catch {
+        return {};
+      }
+    })();
     const stop = (_e, cx) => cx.stop_propagation();
     // .sidebar-toggle (main.css:1213-1230) — padding 4px 8px around a 16px glyph = 32x24,
     // radius 4, muted, hover --accent. .window-controls-btn (main.css:1145-1168) — 46x36,
@@ -154,6 +150,7 @@ export default class Tabs extends View {
       const name = /^tb\d+$/.test(raw) ? program?.name ?? "Terminal" : raw;
       // SortableTab.tsx:130 — displayTitle = customTitle ?? (tabAgent ? strip(title) : title).
       const label = program?.agent ? stripLeadingAgentTitleDecoration(name) : name;
+      const tabColour = tabColorStore[c.id] ?? null;
       // Orca's tab: flat, full height, no pill. SortableTab.tsx:214 — h-full px-1.5 text-xs plus
       // getTabStripBorderClasses (border-t border-r border-border). The slot clamps the tab to
       // `w-[300px] max-w-[300px] min-w-[144px] flex-1` (tab-width-rules.ts:2, applied at
@@ -206,6 +203,8 @@ export default class Tabs extends View {
         // Orca never marks an expanded pane in the title (SortableTab.tsx:130-131); the
         // Minimize2 button below is the only indicator.
         .child(div().flex_1().min_w(0).truncate().child(label))
+        // Colour dot — SortableTab.tsx:293-297: size-2 rounded-full dot, shown only when tab has a colour. Orca reads tab.color; Herdr has no colour field, so the value comes from localStorage["tab.colors.v1"] written by orca-menu. No !isEditing guard exists in this port.
+        .when(tabColour !== null, el => el.child(div().size(8).flex_none().rounded(4).mr(6).bg(tabColour)))
         // Collapse pane — SortableTab.tsx:298-316: shown while the pane is expanded, a 16px box
         // with a 12px `Minimize2`; active tabs always show it, inactive ones on TAB hover
         // (`text-transparent group-hover:text-muted-foreground`). `pane.zoom` collapses.

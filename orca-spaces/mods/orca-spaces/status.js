@@ -53,11 +53,12 @@ const dot = (size, inner, color) => box(size).child(div().size(inner).rounded_fu
  * `size-2`/`size-1.5`/`size-3` are fixed in `StatusIndicator.tsx`, which is why this takes only
  * the box and keeps every mark at its own literal.
  */
-export function statusMark(status, size = 12) {
+export function statusMark(status, size = 12, colors = STATUS_COLORS) {
+  const c = colors ?? STATUS_COLORS;
   if (status === "blocked") {
     // `permission`: the one branch that fills the box (`size-3`).
     return box(size).child(
-      svg("mods/orca-spaces/message-circle-question.svg").size(size).flex_none().text_color(STATUS_COLORS.blocked),
+      svg("mods/orca-spaces/message-circle-question.svg").size(size).flex_none().text_color(c.blocked ?? STATUS_COLORS.blocked),
     );
   }
   if (status === "working") {
@@ -70,36 +71,37 @@ export function statusMark(status, size = 12) {
     // revolution per second, so 1000ms here.
     return box(size).child(
       svg("mods/orca-spaces/agent-working-spinner.svg").size(12).flex_none()
-        .text_color(STATUS_COLORS.working).spin(1000),
+        .text_color(c.working ?? STATUS_COLORS.working).spin(1000),
     );
   }
   // `done`/`active` share emerald; everything else falls to the quiet idle dot.
-  return dot(size, 8, STATUS_COLORS[status] ?? STATUS_COLORS.idle);
+  return dot(size, 8, c[status] ?? c.idle ?? STATUS_COLORS[status] ?? STATUS_COLORS.idle);
 }
 
-// `AgentStateDot` at its default `size="sm"` (`src/renderer/src/components/AgentStateDot.tsx:114-116`): a 10px box
+// `AgentStateDot` at its default `size="sm"` (`src/renderer/src/components/AgentStateDot.tsx:105-197`): a 10px box
 // (`h-2.5 w-2.5`), a 6px dot or spinner (`size-1.5`), a 10px glyph (`size-2.5`).
 // `done` is the `CircleCheck` branch (`:148-157`), not an emerald dot — the card lane keeps
 // its dot. `working` is the same 6px ring the card draws at 12px; the asset scales.
-export function agentStateMark(status) {
+export function agentStateMark(status, colors = STATUS_COLORS) {
+  const c = colors ?? STATUS_COLORS;
   const size = 10, inner = 6;
   if (status === "blocked") {
-    // `permission`/`waiting` (`:165-172`): the question glyph, `size-2.5` at this size.
+    // `permission`/`waiting` (`:168-176`): the question glyph, `size-2.5` at this size.
     return box(size).child(
-      svg("mods/orca-spaces/message-circle-question.svg").size(size).flex_none().text_color(STATUS_COLORS.blocked),
+      svg("mods/orca-spaces/message-circle-question.svg").size(size).flex_none().text_color(c.blocked ?? STATUS_COLORS.blocked),
     );
   }
   if (status === "working") {
-    // `src/renderer/src/components/AgentStateDot.tsx:126-134` -> `AgentWorkingSpinner className="size-1.5"`.
+    // `src/renderer/src/components/AgentStateDot.tsx:130-138` -> `AgentWorkingSpinner className="size-1.5"`.
     return box(size).child(
       svg("mods/orca-spaces/agent-working-spinner.svg").size(inner).flex_none()
-        .text_color(STATUS_COLORS.working).spin(1000),
+        .text_color(c.working ?? STATUS_COLORS.working).spin(1000),
     );
   }
   if (status === "done") {
     return box(size).child(
-      svg("mods/orca-spaces/circle-check.svg").size(size).flex_none().text_color(STATUS_COLORS.done),
+      svg("mods/orca-spaces/circle-check.svg").size(size).flex_none().text_color(c.done ?? STATUS_COLORS.done),
     );
   }
-  return dot(size, inner, STATUS_COLORS[status] ?? STATUS_COLORS.idle);
+  return dot(size, inner, c[status] ?? c.idle ?? STATUS_COLORS[status] ?? STATUS_COLORS.idle);
 }
