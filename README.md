@@ -8,7 +8,7 @@ Every mod in this repository is self-contained and can be dropped into any Herdr
 
 | Mod | Category | Description |
 |---|---|---|
-| [`orca-files/`](orca-files/) | Explorer | Full-bleed file explorer tree with 30+ extension icons, live debounced filter input, and Git status rollups. |
+| [`orca-files/`](orca-files/) | Explorer | Full-bleed file explorer tree with 30+ extension icons, a Names/Contents switch over one debounced input, and Git status rollups. |
 | [`orca-changes/`](orca-changes/) | Source Control | Git changes inspector with staged/unstaged partitioning, diff viewer, and commit composer. |
 | [`orca-spaces/`](orca-spaces/) | Sidebar | Project group hierarchy, worktree cards with primary badge, and aggregated agent status marks. |
 | [`new-menu/`](new-menu/) | Launcher | 288px create dropdown for launching agents, opening folders, and creating worktrees. |
