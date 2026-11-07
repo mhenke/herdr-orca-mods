@@ -39,7 +39,7 @@ function gitRepo(cwd, cx) {
 }
 
 export default class Tabs extends View {
-  init() {
+  init(_props, cx) {
     this.pressed = null;
     // Which tab is under the pointer. Orca's close/collapse reveal is `group-hover` on the
     // tab (SortableTab.tsx:317,323); gpui-kit has no group-hover, so the id is tracked here.
@@ -50,6 +50,16 @@ export default class Tabs extends View {
     } catch {
       this.panels = {};
     }
+    // `window()` is null until the window publishes it. Seed it here first; if it is still
+    // null, read it again in the task phase, cache it, and repaint. Orca seeds the same flags
+    // with useState(false) + useEffect (WindowControls.tsx:7-16).
+    this.windowState = window();
+    const seed = (cx, tries) => {
+      const w = window();
+      if (w) { this.windowState = w; cx.notify(); return; }
+      if (tries > 0) cx.timer.after(50, (cx) => seed(cx, tries - 1));
+    };
+    if (!this.windowState) cx.timer.after(0, (cx) => seed(cx, 20));
   }
 
   // The side panel is remembered per space: switching shows that space's choice
@@ -130,6 +140,14 @@ export default class Tabs extends View {
       .text_color(t.muted).hover(s => s.bg(close ? "#c42b1c" : t.hover).text_color(close ? "#ffffff" : t.foreground))
       .role("button").accessibility_label(label)
       .on_mouse_down("left", stop).on_click(action).child(glyph);
+    // TitlebarMainStrip.tsx:12-33,76 — `RightSidebarToggle`: `.sidebar-toggle mr-2`
+    // (main.css:1213-1230 = 4px/8px padding around the 16px `PanelRight`, so 32x24, radius 4,
+    // muted, hover --accent + foreground). Herdr toggles it with `layout.toggle` (commands.rs:77).
+    const panelToggle = (action) => div().id("panel-toggle").mr(8).w(32).h(24).flex_none().flex().items_center().justify_center().rounded(4)
+      .text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground))
+      .role("button").accessibility_label("Toggle right sidebar")
+      .on_mouse_down("left", stop).on_click(action)
+      .child(svg("mods/orca-tabs/panel-right.svg").size(16));
     const item = (c, i) => {
       const program = (panes() ?? []).find(p => p.tab === c.id && p.program?.agent)?.program ?? (panes() ?? []).find(p => p.tab === c.id)?.program;
       const raw = c.name ?? "Terminal";
@@ -214,12 +232,18 @@ export default class Tabs extends View {
           .on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); })
           .child(svg("mods/orca-tabs/close.svg").size(12))));
     };
-    const root = layout(), sidebar = find(root, "sidebar"), w = window();
+    const root = layout();
+    const sidebar = find(root, "sidebar");
+    // Live read keeps maximize/restore current (Orca subscribes to onMaximizeChanged,
+    // WindowControls.tsx:15); the cached seed covers the first paint, when `window()` is null.
+    const live = window();
+    if (live) this.windowState = live;
+    const w = live ?? this.windowState ?? {};
     // .titlebar has no horizontal padding (main.css:1072-1084), so the strip is flush from the
     // left; only macOS traffic lights that land over this column reserve space. Old saved rails
     // and a dragged-narrow sidebar can be smaller than the window buttons.
     const lights = root?.traffic_lights;
-    const leftPad = w?.platform === "macos" && w.titlebar === "none" && !w.fullscreen && lights?.length
+    const leftPad = w.platform === "macos" && w.titlebar === "none" && !w.fullscreen && lights?.length
       ? Math.max(10, (lights[0] + 64) / (settings()?.zoom || 1) - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 0;
     const panel = find(root, "panel"), body = find(root, "panel-body");
@@ -268,11 +292,16 @@ export default class Tabs extends View {
           if (z) run("pane.zoom", { pane: z.pane });
         })
         .child(svg("mods/orca-tabs/minimize-2.svg").size(14))))
+      // TitlebarMainStrip.tsx:76 — `RightSidebarToggle` shows only while the sidebar is closed
+      // (`showRightSidebarControls && !rightSidebarOpen`); the open panel draws its own close
+      // button (`right-sidebar/index.tsx:135`). Herdr's panel is a layout node, so its `hidden`
+      // flag is the same test and `layout.toggle` (commands.rs:77) is the action.
+      .when(Boolean(panel?.hidden), el => el.child(panelToggle(() => run("layout.toggle", { id: "panel" }))))
       // WindowControls.tsx:27-30,42-49,60-67 — Linux and Windows both replace native chrome with
       // the same 10x10 SVG paths; only macOS keeps its traffic lights. `window().buttons` is
       // false when the platform draws its own titlebar, in which case drawing them here would
-      // paint two sets.
-      .when(w?.buttons && w.platform !== "macos", el => el.child(h_flex().h_full().items_center()
+      // paint two sets. Uses the cached `windowState` so the strip renders on first paint.
+      .when(w.buttons && w.platform !== "macos", el => el.child(h_flex().h_full().items_center()
         .child(winBtn("minimize", "Minimize", svg("mods/orca-tabs/win-min.svg").size(10), () => run("window.minimize"), false))
         .child(winBtn("maximize", "Maximize", svg(`mods/orca-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(10), () => run("window.maximize"), false))
         .child(winBtn("close-window", "Close window", svg("mods/orca-tabs/win-close.svg").size(10), () => run("window.close"), true))));
