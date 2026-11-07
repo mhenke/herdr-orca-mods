@@ -44,10 +44,6 @@ const base = (path) => path.replace(/\/+$/, "").split("/").pop();
 // Changes made outside Herdr (an editor's save, a commit in another app): looked
 // for this often, in repos the list shows, while the window is in front.
 const FALLBACK = 60000;
-// How long a space waits for its git answer before it is drawn without one. Long enough that a
-// local `git` read lands first (so a new worktree appears under its repo, not beside it), short
-// enough that a space on an unreachable machine still shows up.
-const SETTLE = 1500;
 // Safely read a stored JSON value of the expected shape; a mangled key never throws.
 function stored(key, fallback) {
   try {
@@ -100,10 +96,9 @@ export default class Spaces extends View {
     this.ready = {}; // machine -> its layout was readable at the last look
     this.at = {}; // space -> its where() at the last look
     this.watching = new Set(); // local repos' git folders
-    // Spaces made while this runs wait (at most a moment) for their git, so a worktree appears
-    // under its repo instead of jumping there. Only the age of each new space is tracked; whether
-    // it is ready is recomputed every pass (`settled`), so nothing has to be latched or cleared.
-    this.born = {};
+    // Discovery: false until the first git pass answers for every place, which is the moment
+    // Orca starts drawing rows (`startupWorktreeRefreshCompleted`).
+    this.loaded = false;
     this.pressed = null;
     // The group whose menu overlay is open: its header cluster stays visible while the
     // pointer is over the overlay instead of the header.
@@ -129,11 +124,10 @@ export default class Spaces extends View {
     const sp = spaces();
     const due = this.due(now, sp, panes());
     if (due.size) this.refreshGit(due, cx);
-    // A space younger than SETTLE is held back from the list until its git answer arrives. That
-    // answer notifies on its own, but when there is no answer to wait for — a folder outside git,
-    // an unreachable machine — nothing would repaint and the row would stay hidden until the
-    // 60s fallback. If one is still settling, ask for the frame that shows it.
-    const settling = sp.some((s) => !this.settled(s, panes(), now));
+    // While discovery is running the list is deliberately empty, so something must repaint when
+    // it ends. The git pass notifies on completion; this covers the case where there is nothing
+    // to ask (no spaces at all), so the empty state appears rather than a blank pane.
+    const discovering = !this.loaded;
     // The row order git implies is committed here, in the task phase, not from `render`.
     this.settleRows(cx);
     // Agent state is read straight from the host model (`space.status`, `agent.status`), so a
@@ -146,7 +140,7 @@ export default class Spaces extends View {
     const now2 = { spaces: sp.map((s) => `${s.id}:${s.status}`).join(","), agents: agents().map((a) => `${a.address}:${a.status}`).join(",") };
     const changed = now2.spaces !== this.statusSeen?.spaces || now2.agents !== this.statusSeen?.agents;
     this.statusSeen = now2;
-    if (changed || settling) cx.notify();
+    if (changed || discovering) cx.notify();
 
   }
 
@@ -247,19 +241,25 @@ export default class Spaces extends View {
   }
 
   // One look at a time, each place once however often it was asked for meanwhile.
+  //
+  // The keys run together, not one after another: Orca refreshes every host concurrently
+  // (`startup-worktree-refresh.ts:41-45` `Promise.allSettled`), and a serial queue here meant the
+  // last row of a big list waited behind every earlier repo's six `git` calls. `check` asks git
+  // for read-only facts, so overlapping is safe; the loop stays for keys that arrive mid-batch.
   refreshGit(keys, cx) {
     for (const k of keys) this.pending.add(k);
     if (this.refreshing) return;
     this.refreshing = true;
     cx.spawn(async (cx) => {
       while (this.pending.size) {
-        const keys = [...this.pending];
+        const batch = [...this.pending];
         this.pending.clear();
-        for (const key of keys) await this.check(key, cx);
+        await Promise.all(batch.map((key) => this.check(key, cx).catch(() => {})));
       }
       const used = new Set(Object.values(this.git).filter(Boolean).map((g) => readPair(g.repo)).filter(([on]) => !on).map(([, repo]) => repo));
       for (const repo of this.watching) if (!used.has(repo)) this.watching.delete(repo);
       this.refreshing = false;
+      this.loaded = true;
       cx.notify();
     });
   }
@@ -442,20 +442,19 @@ export default class Spaces extends View {
   // the frame. Reordering is the drag handler's job (`use-document-drop.ts:72` fires
   // `onReorderWorktrees`); nothing here moves a space.
   //
-  // `settled` is the one fact the old version kept here: a space is drawn only once its place
-  // is known, so a card does not flash as a folder-less row and then jump into its repo. It is
-  // now computed on each pass from `where()` instead of being latched into a `shown` set, which
-  // needed a timer to poke it and a `born` map to age it.
-  settled(w, ps, now) {
-    if (where(w, ps) in this.git) return true;
-    this.born[w.id] ??= now;
-    return now - this.born[w.id] > SETTLE;
+  // Orca draws no rows until discovery finishes, then all of them at once
+  // (`startup-worktree-refresh.ts:75-80` sets `startupWorktreeRefreshCompleted` in a `finally`;
+  // `EmptyState.tsx:14` gates its "No workspaces found" on the same flag). Building the list
+  // row by row as each repo answered was the visible defect: cards appeared without a repo,
+  // then jumped into one. There is no timer here, only "has the first pass finished".
+  discoverable(w, ps) {
+    return this.loaded || where(w, ps) in this.git;
   }
 
   ordered() {
     const now = Date.now();
     const sp = spaces(), ps = panes();
-    const rows = sp.map((w, i) => ({ w, i, g: this.git[where(w, ps)] ?? null, ok: this.settled(w, ps, now) }));
+    const rows = sp.map((w, i) => ({ w, i, g: this.git[where(w, ps)] ?? null, ok: this.discoverable(w, ps) }));
     // A repo worktree is one card: `linked` worktrees and second same-checkout spaces fold
     // into the first space on that top-level folder. Folder spaces merge only with themselves.
     const seen = new Set(), list = [];
@@ -1100,12 +1099,21 @@ export default class Spaces extends View {
             cx.notify();
           })
           .child(v_flex().id("space-content").w_full().flex_none().px(0).pb(8)
+            // `StartupWorktreeRefreshStatus.tsx:19-30` — one status row, `mx-3 mb-2 flex
+            // items-center gap-2 text-xs text-muted-foreground`, spinner then "Loading
+            // workspaces…". Orca holds it back 200ms (`:14-16`) so a fast load draws nothing;
+            // the delay is not ported because Herdr has no per-frame timer to spend on it and a
+            // visible loader for a moment is honest.
+            .when(!this.loaded, el => el.child(h_flex().flex_none().mx(12).mb(8).gap(8).items_center()
+              .text_size(11).text_color(t.muted)
+              .child(div().size(14).flex_none().spin(1000).child(svg("mods/orca-spaces/loader-circle.svg").size(14)))
+              .child(div().child("Loading workspaces\u2026"))))
             // `EmptyState.tsx:14-27` — Orca's only branch without filters, `flex flex-col
             // items-center gap-2 px-4 py-6 text-center text-[11px] text-muted-foreground`,
-            // holding "No workspaces found". Orca also requires `startupWorktreeRefreshCompleted`;
-            // Herdr has no discovery flag to read, and a zero-row list is already settled.
+            // holding "No workspaces found". It is gated on `discoveryCompleted` (`:14`), so
+            // "found nothing" cannot be claimed while the list is still being discovered.
             // `WorktreeList.tsx:285-287`: the gate is the row plan (`rowModel.rows.length === 0`).
-            .when(rows.length === 0, el => el.child(div().flex().flex_col().items_center().gap(8).px(16).py(24).w_full()
+            .when(this.loaded && rows.length === 0, el => el.child(div().flex().flex_col().items_center().gap(8).px(16).py(24).w_full()
               .text_size(11).text_center().text_color(t.muted)
               .child(div().child("No workspaces found"))))
             .children(rows.length ? this.grouped(t, cx, rows) : [])))
